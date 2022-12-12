@@ -371,3 +371,197 @@ namespace Application.CallCenter.MsgList.Responses
         }
     }
 }
+----datamodel4\\\
+
+namespace Infrastructure.CallCenter.MsgList.DataModels
+{
+    /// <summary>
+    /// 伝言状況
+    /// </summary>
+    public partial class msgListDataModel
+    {
+        public string? seqNo { get; init; }
+        public string? tokCd { get; init; }
+        public string? callType { get; init; }
+        public string? callTypeNm { get; init; }
+        public string? resultFlg { get; init; }
+        public string? callDt { get; init; }
+        public string? callHour { get; init; }
+        public string? callMin { get; init; }
+        public string? callClass { get; init; }
+        public string? callClassNm { get; init; }
+        public string? memo { get; init; }
+        public string? urgentFlg { get; init; }
+        public string? custNm { get; init; }
+        public string? custNmKn { get; init; }
+        public string? inpTanCd { get; init; }
+        public string? inpTanNm { get; init; }
+        public string? destTanCd { get; init; }
+        public string? destTanNm { get; init; }
+        public string? datFlg { get; init; }
+        public string? crtDt { get; init; }
+        public string? crtTm { get; init; }
+        public string? wrtDt { get; init; }
+        public string? wrtTm { get; init; }
+    }
+}
+-----dataMglist
+using System.Data;
+using Oracle.ManagedDataAccess.Client;
+using Infrastructure.Constants;
+using Domain.CallCenter.MsgList.Repository;
+using Domain.CallCenter.MsgList.Entity;
+using Infrastructure.Database.Context;
+using Infrastructure.Database.DbConnect.DBConnect;
+using Infrastructure.Database.Tables.Namemta.DataModels;
+
+namespace Infrastructure.CallCenter.MsgList
+{
+    public class EFmsgListRepository : IMsgList
+    {
+        private readonly TodoListContext _context;
+        private readonly tokmtaContext   _contextTokmta;
+        private readonly tanmtaContext   _contextTanmta;
+        private readonly jdnthaContext   _contextJdntha;
+        private readonly namemtaContext  _contextNamemta;
+
+        private const string CST_NAMEMTA_KBN_CALLCLASS = "23";      // 各種名称情報（コール区分）
+        private const string CST_NAMEMTA_KBN_CALLTYPE = "24";       // 各種名称情報（コール内容分類）
+        private const string CST_EXCLUDE_CALLCLASS = "00002";       // お元気コール
+        private const string CST_CALLRSLT_NOCOMP = "0";             // 未完了
+        private const string CST_CALLRSLT_COMP = "1";               // 完了
+
+        public EFmsgListRepository(TodoListContext context,
+                                   tokmtaContext   tokmtaContext,
+                                   tanmtaContext   tanmtaContext,
+                                   jdnthaContext   jdnthaContext,
+                                   namemtaContext  nameContext)
+        {
+            _context        = context;
+            _contextTokmta  = tokmtaContext;
+            _contextTanmta  = tanmtaContext;
+            _contextJdntha  = jdnthaContext;
+            _contextNamemta = nameContext;
+        }
+
+        #region 伝言状況情報取得
+        public IEnumerable<msgListFindByOperatorIdAndCallDate> findByOperatorIdAndCallDate(string operatorId, string callDate)
+        {
+            string query;
+
+            IEnumerable<msgListFindByOperatorIdAndCallDate> msgListDataReader;
+
+            // データベース接続
+            DbManager dbManager = new DbManager();
+
+            try
+            {
+                query = $@"
+                          SELECT /*+ USE_CONCAT INDEX(A X_TODOLIST03) USE_NL_WITH_INDEX(D X_TANMTA01) */
+                            TOD.SEQNO AS SEQNO
+                           ,TOD.TOKCD AS TOKCD
+                           ,TOD.CALLTYPE AS CALLTYPE
+                           ,TOD.CALLRSLT AS RESULTFLG
+                           ,TOD.CALLDATE AS CALLDT
+                           ,TOD.CALLHOUR AS CALLHOUR
+                           ,TOD.CALLMIN AS CALLMIN
+                           ,TOD.CALLKBN AS CALLCLASS
+                           ,TOD.MEMO AS MEMO
+                           ,TOD.URGENTKB AS URGENTFLG
+                           ,TRIM((TRIM(TOK.TOKNMA) || ' ' ||TRIM(TOK.TOKNMB))) AS CUSTNM
+                           ,TRIM((TRIM(TOK.TOKNK) || ' ' ||TRIM(TOK.TOKNKB))) AS CUSTNMKN
+                           ,TANA.TANCD AS INPTANCD
+                           ,TANA.TANNM AS INPTANNM
+                           ,TANB.TANCD AS DESTTANCD
+                           ,TANB.TANNM AS DESTTANNM
+                           ,TOK.DATKB AS DATFLG
+                           ,TOD.CRTDT AS CRTDT
+                           ,TOD.CRTTM AS CRTTM
+                           ,TOD.WRTDT AS WRTDT
+                           ,TOD.WRTTM AS WRTTM
+                          FROM EVE_USR1.TODOLIST TOD
+                          INNER JOIN EVE_USR1.TOKMTA TOK ON TOD.TOKCD = TOK.TOKCD
+                          INNER JOIN EVE_USR1.TANMTA TANA ON TOD.INPTANCD = TANA.TANCD
+                          INNER JOIN EVE_USR1.TANMTA TANB ON TOD.TANCD = TANB.TANCD
+                          LEFT JOIN EVE_USR1.JDNTHA JDN ON TOD.JDNNO = JDN.JDNNO AND JDN.DATKB = '{CommonConst.CST_DATKB.EXIST}'
+                          WHERE TOD.INPTANCD = :operatorId
+                            AND TOD.CALLKBN != '{CST_EXCLUDE_CALLCLASS}'
+                            AND ((TOD.CRTDT <= :sendDate AND TOD.CALLRSLT = '{CST_CALLRSLT_NOCOMP}') OR (TOD.CRTDT = :sendDate AND TOD.CALLRSLT = '{CST_CALLRSLT_COMP}'))
+                            AND TOD.CALLKBN IN (SELECT CODE1 FROM EVE_USR1.NAMEMTA WHERE DATKB = '{CommonConst.CST_DATKB.EXIST}' AND KBN = '{CST_NAMEMTA_KBN_CALLCLASS}')
+                          ORDER BY TOD.URGENTKB DESC,TOD.CRTDT,TOD.CRTTM
+                        ";
+
+                using (OracleCommand cmd = new OracleCommand(query.ToString()))
+                {
+                    cmd.Connection = dbManager.con;
+                    cmd.Parameters.Add("operatorId", operatorId);
+                    cmd.Parameters.Add("sendDate", callDate);
+
+                    using (OracleDataReader reader = cmd.ExecuteReader())
+                    {
+                        msgListDataReader = dbManager.DataReaderToEntities<msgListFindByOperatorIdAndCallDate>(reader);
+
+                        // 戻り値を返す
+                        return msgListDataReader.Select(x => new msgListFindByOperatorIdAndCallDate()
+                        {
+                            seqNo = x.seqNo,
+                            tokCd = x.tokCd,
+                            callType = x.callType,
+                            callTypeNm = getName(CST_NAMEMTA_KBN_CALLTYPE, x.callType),
+                            resultFlg = x.resultFlg,
+                            callDt = x.callDt,
+                            callHour = x.callHour,
+                            callMin = x.callMin,
+                            callClass = x.callClass,
+                            callClassNm = getName(CST_NAMEMTA_KBN_CALLCLASS, x.callClass),
+                            memo = x.memo,
+                            urgentFlg = x.urgentFlg,
+                            custNm = x.custNm,
+                            custNmKn = x.custNmKn,
+                            inpTanCd = x.inpTanCd,
+                            inpTanNm = x.inpTanNm,
+                            destTanCd = x.destTanCd,
+                            destTanNm = x.destTanNm,
+                            datFlg = x.datFlg,
+                            crtDt = x.crtDt,
+                            crtTm = x.crtTm,
+                            wrtDt = x.wrtDt,
+                            wrtTm = x.wrtTm
+                        });
+                    }
+                }
+            }
+            catch (OracleException e)
+            {
+                Console.WriteLine("伝言状況取得：msgList");
+                Console.WriteLine("Code: " + e.ErrorCode + "\n" + "Message: " + e.Message);
+                Console.WriteLine("例外処理が発生しました。 システム管理者に連絡してください。");
+
+                return null;
+            }
+            finally
+            {
+                //データベースを閉じる
+                dbManager.Close();
+            }
+        }
+        #endregion
+
+        /// <summary>
+        /// 名称取得
+        /// </summary>
+        /// <returns></returns>
+        private string getName(string categoryId, string cd)
+        {
+            if (cd.Trim() == "")
+            {
+                return "";
+            }
+
+            namemtaDataModel result = _contextNamemta.NAMEMTA.Where(x => x.classCd.Equals(categoryId)).Where(x => x.cd1.Equals(cd)).FirstOrDefault();
+
+            return result == null ? "" : result.nm1;
+        }
+    }
+}
+
